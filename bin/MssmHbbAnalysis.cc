@@ -18,6 +18,7 @@ using namespace analysis;
 using namespace analysis::tools;
 
 float GetBTag(const Jet & jet, const std::string & algo);
+const bool onlineSelection(const analysis::tools::Jet & fLeadOfflineJet, const analysis::tools::Jet & sLeadOfflineJet, const bool & before_run_crit);
 
 // =============================================================================================   
 int main(int argc, char * argv[])
@@ -35,7 +36,9 @@ int main(int argc, char * argv[])
    
    // Jets
    analysis.addTree<Jet> ("Jets",jetsCol_);
-
+   
+   // Muons
+   analysis.addTree<Muon> ("Muons",muonsCol_);
 
    // Trigger path info
    analysis.triggerResults(triggerCol_);
@@ -45,47 +48,45 @@ int main(int argc, char * argv[])
       analysis.addTree<TriggerObject> (obj,Form("%s/%s",triggerObjDir_.c_str(),obj.c_str()));
    }
    
-
    // JSON for data   
    if( !isMC_ ) analysis.processJsonFile(json_);
    
    // output file
-   TFile hout(outputRoot_.c_str(),"recreate");
    
    std::string sr_s = "SR";
    if ( ! signalregion_ ) sr_s = "CR";
+   std::cout << sr_s << std::endl;
+   //std::cout << outputRoot_ << std::endl;
+
    boost::algorithm::replace_last(outputRoot_, ".root", "_"+sr_s+".root"); 
-   
+   std::cout << outputRoot_ << std::endl;   
+   TFile hout(outputRoot_.c_str(),"recreate");
+
    std::map<std::string, TH1F*> h1;
-   std::map<std::string, TH2F*> h2;
-   
-   
    h1["n"]        = new TH1F("n" , "" , 30, 0, 30);
    h1["n_btag"]    = new TH1F("n_btag" , "" , 30, 0, 30);
+   h1["n_muons"]    = new TH1F("n_muons"  , "" , 30, 0, 30);
    h1["n_ptmin20"]= new TH1F("n_ptmin20" , "" , 30, 0, 30);
    h1["n_ptmin20_btag"] = new TH1F("n_ptmin20_btag" , "" , 30, 0, 30);
    for ( int i = 0 ; i < njetsmin_ ; ++i )
    {
-      h1[Form("pt_%i",i)]         = new TH1F(Form("pt_%i",i) , "" , 100, 0, 1000);
-      h1[Form("eta_%i",i)]        = new TH1F(Form("eta_%i",i) , "" , 100, -5, 5);
-      h1[Form("phi_%i",i)]        = new TH1F(Form("phi_%i",i) , "" , 100, -4, 4);
-      h1[Form("btag_%i",i)]       = new TH1F(Form("btag_%i",i) , "" , 500, 0, 1);
+      h1[Form("pt_%i_looseID",i)]         = new TH1F(Form("pt_%i_looseID",i) , "" , 100, 0, 1000);
+      h1[Form("eta_%i_looseID",i)]        = new TH1F(Form("eta_%i_looseID",i) , "" , 100, -5, 5);
+      h1[Form("phi_%i_looseID",i)]        = new TH1F(Form("phi_%i_looseID",i) , "" , 100, -4, 4);
+      h1[Form("btag_%i_looseID",i)]       = new TH1F(Form("btag_%i_looseID",i) , "" , 500, 0, 1);
+
+      h1[Form("pt_%i_kin",i)]         = new TH1F(Form("pt_%i_kin",i) , "" , 100, 0, 1000);
+      h1[Form("eta_%i_kin",i)]        = new TH1F(Form("eta_%i_kin",i) , "" , 100, -5, 5);
+      h1[Form("phi_%i_kin",i)]        = new TH1F(Form("phi_%i_kin",i) , "" , 100, -4, 4);
+      h1[Form("btag_%i_kin",i)]       = new TH1F(Form("btag_%i_kin",i) , "" , 500, 0, 1);
       
       h1[Form("pt_%i_btag",i)]     = new TH1F(Form("pt_%i_btag",i) , "" , 100, 0, 1000);
       h1[Form("eta_%i_btag",i)]    = new TH1F(Form("eta_%i_btag",i) , "" , 100, -5, 5);
       h1[Form("phi_%i_btag",i)]    = new TH1F(Form("phi_%i_btag",i) , "" , 100, -4, 4);
       h1[Form("btag_%i_btag",i)]   = new TH1F(Form("btag_%i_btag",i) , "" , 500, 0, 1);
-      
-      // btag in  pt bins
-      for ( int j = 0 ; j < 4 ; ++j )
-      {
-         h1[Form("btag_%d_%d_btag",i,j)]   = new TH1F(Form("btag_%d_%d_btag",i,j) , "" , 500, 0, 1);
-      }
-      
-      h2[Form("eta_phi_%d_btag",i)] = new TH2F(Form("eta_phi_%d_btag",i), "", 88, -2.2,2.2,126,-3.15,3.15);
    }
-   h1["m12"]     = new TH1F("m12"     , "" , 50, 0, 2000);
-   h1["m12_btag"] = new TH1F("m12_btag" , "" , 50, 0, 2000);
+   h1["m12"]     = new TH1F("m12"     , "" , 50, 0, 1000);
+   h1["m12_btag"] = new TH1F("m12_btag" , "" , 50, 0, 1000);
    
    
    double mbb;
@@ -105,60 +106,73 @@ int main(int argc, char * argv[])
    // 4: delta R
    // 5: delta eta
    // 6: btag (bbnb)
+   // 7: muon veto
    int nsel[10] = { };
-   int nmatch[10] = { };
+//   int nmatch[10] = { };
 
    if ( nevtmax_ < 0 ) nevtmax_ = analysis.size();
+ 	 
+   // start event loop 
    for ( int i = 0 ; i < nevtmax_ ; ++i )
    {
       int njets = 0;
+      int n_selected_muons = 0;
       int njets_btag = 0;
       bool goodEvent = true;
-      
+      bool muonJetEvent = false;  
+
       if ( i > 0 && i%100000==0 ) std::cout << i << "  events processed! " << std::endl;
+
+      int run = analysis.run();
+      int run_crit = 304508;
+      bool before_run_crit = run <= run_crit;
       
       analysis.event(i);
       if (! isMC_ )
       {
          if (!analysis.selectJson() ) continue; // To use only goodJSonFiles
       }
-      
-      int triggerFired = analysis.triggerResult(hltPath_);
+
+      bool triggerFired = analysis.triggerResult(hltPath_);
       if ( !triggerFired ) continue;
       
       ++nsel[0];
-      
+
       // match offline to online
-      analysis.match<Jet,TriggerObject>("Jets",triggerObjects_,0.3);
-      
+      analysis.match<Jet,TriggerObject>("Jets",triggerObjects_,0.5);
+
       // Jets - std::shared_ptr< Collection<Jet> >
       auto slimmedJets = analysis.collection<Jet>("Jets");
       std::vector<Jet *> selectedJets;
       for ( int j = 0 ; j < slimmedJets->size() ; ++j )
       {
-//         if ( jetsid_ == "LOOSE" && slimmedJets->at(j).idLoose() ) selectedJets.push_back(&slimmedJets->at(j));
-//         if ( jetsid_ == "TIGHT" && slimmedJets->at(j).idTight() ) selectedJets.push_back(&slimmedJets->at(j));
-         if ( slimmedJets->at(j).idTight() ) selectedJets.push_back(&slimmedJets->at(j));
+         if ( slimmedJets->at(j).idLoose() ) selectedJets.push_back(&slimmedJets->at(j));
       }
       if ( (int)selectedJets.size() < njetsmin_ ) continue;
       
       ++nsel[1];
-      
+
       // Kinematic selection - 3 leading jets
       for ( int j = 0; j < njetsmin_; ++j )
       {
          Jet * jet = selectedJets[j];
+	 //std::cout << "selectedJets[" << j << "] = " << jet->pt() << std::endl; //check pT sorting
+         h1[Form("pt_%i_looseID",j)]   -> Fill(jet->pt());
+         h1[Form("eta_%i_looseID",j)]  -> Fill(jet->eta());
+         h1[Form("phi_%i_looseID",j)]  -> Fill(jet->phi());
+         h1[Form("btag_%i_looseID",j)] -> Fill(GetBTag(*jet,btagalgo_));
+
          if ( jet->pt() < jetsptmin_[j] || fabs(jet->eta()) > jetsetamax_[j] )
          {
             goodEvent = false;
             break;
          }
       }
-      
+
       if ( ! goodEvent ) continue;
       
       ++nsel[2];
-      
+
       // delta_R selection
       for ( int j1 = 0; j1 < njetsmin_-1; ++j1 )
       {
@@ -173,13 +187,12 @@ int main(int argc, char * argv[])
       if ( ! goodEvent ) continue;
       
       ++nsel[3];
-      
+
       // delta_eta selection
       if ( fabs(selectedJets[0]->eta() - selectedJets[1]->eta()) > detamax_ ) continue;
       
       ++nsel[4];
-      
-      
+     
       // Fill histograms of kinematic passed events
       for ( int j = 0 ; j < (int)selectedJets.size() ; ++j )
       {
@@ -189,15 +202,18 @@ int main(int argc, char * argv[])
       
       h1["n"] -> Fill(selectedJets.size());
       h1["n_ptmin20"] -> Fill(njets);
+
+      // bbnb/bbb selection
       for ( int j = 0; j < njetsmin_; ++j )
       {
          Jet * jet = selectedJets[j];
-         h1[Form("pt_%i",j)]   -> Fill(jet->pt());
-         h1[Form("eta_%i",j)]  -> Fill(jet->eta());
-         h1[Form("phi_%i",j)]  -> Fill(jet->phi());
-         h1[Form("btag_%i",j)] -> Fill(GetBTag(*jet,btagalgo_));
+	 //h1["pt_" + std::to_string(j)] -> Fill(jet->pt());
+         h1[Form("pt_%i_kin",j)]   -> Fill(jet->pt());
+         h1[Form("eta_%i_kin",j)]  -> Fill(jet->eta());
+         h1[Form("phi_%i_kin",j)]  -> Fill(jet->phi());
+         h1[Form("btag_%i_kin",j)] -> Fill(GetBTag(*jet,btagalgo_));
          
-         if ( j < 2 && GetBTag(*jet,btagalgo_) < btagmin[j] )     goodEvent = false;
+	 if ( j < 2 && GetBTag(*jet,btagalgo_) < btagmin[j] )     goodEvent = false;
          if ( ! signalregion_ )
          {
             if ( j == 2 && GetBTag(*jet,btagalgo_) > nonbtagwp_ )    goodEvent = false; 
@@ -208,38 +224,81 @@ int main(int argc, char * argv[])
          }
       }
       
-      h1["m12"] -> Fill((selectedJets[0]->p4() + selectedJets[1]->p4()).M());
-      
+      if ( ! signalregion_ ) h1["m12"] -> Fill((selectedJets[0]->p4() + selectedJets[1]->p4()).M());
+
       if ( ! goodEvent ) continue;
       
       ++nsel[5];
-
-//            std::cout << "oioi" << std::endl;
-      
       
       // Is matched?
-      bool matched[10] = {true,true,true,true,true,true,true,true,true,true};
+/*      bool matched[10] = {true,true,true,true,true,true,true,true,true,true};
       for ( int j = 0; j < 2; ++j )
       {
          Jet * jet = selectedJets[j];
 //         for ( auto & obj : triggerObjects_ )   matched = (matched && jet->matched(obj));
          for ( size_t io = 0; io < triggerObjects_.size() ; ++io )
          {       
+            if (run > run_crit && io == 0) continue;
+            else if (run <= run_crit && io == 1) continue;
             if ( ! jet->matched(triggerObjects_[io]) ) matched[io] = false;
+	    //if(isMC_) continue;
+	    goodEvent = ( goodEvent && matched[io] );
+	    if ( matched[io] ) ++nmatch[io]; 
          }
       }
-      
-      for ( size_t io = 0; io < triggerObjects_.size() ; ++io )
+*/
+      if ( ! onlineSelection(*selectedJets[0],*selectedJets[1],before_run_crit) ) goodEvent = false;
+ 
+/*      for ( size_t io = 0; io < triggerObjects_.size() ; ++io )
       {
+	 if ((run > run_crit && io == 0) || isMC_) continue;
+	 else if (run <= run_crit && io == 1) continue;
          if ( matched[io] ) ++nmatch[io];
          goodEvent = ( goodEvent && matched[io] );
       }
-      
+*/      
       if ( ! goodEvent ) continue;
       
       ++nsel[6];
-     
-      // Fill histograms of passed bbnb btagging selection
+
+      // Muon veto 
+      auto slimmedMuons = analysis.collection<Muon>("Muons");
+      //std::vector<Muon *> selectedMuons;
+      //std::vector<Muon *> selectedMuonsinJet;
+      const char muonID = muonsid_.at(0);
+
+      for ( int m = 0; m < slimmedMuons->size() ; ++m)
+      {
+	 auto general_muon = slimmedMuons->at(m);
+	 if ( (muonID == 'M' && general_muon.isMediumMuon()) || (muonID == 'T' && general_muon.isTightMuon()) )
+	 {
+		auto selected_muon = general_muon;
+		++n_selected_muons;
+		if(selected_muon.pt() < muonsptmin_[n_selected_muons] || fabs(selected_muon.eta()) > muonsetamax_[n_selected_muons]) continue;
+		float dR_muj0 = selectedJets[0]->deltaR(selected_muon);
+		float dR_muj1 = selectedJets[1]->deltaR(selected_muon);
+                //selectedMuons.push_back(&selected_muon) ;	
+
+		if ( dR_muj0 < drmax_ || dR_muj1 < drmax_ ) muonJetEvent = true ;
+	 }
+      }
+      h1["n_muons"] -> Fill(n_selected_muons);
+
+/*     for ( size_t m = 0; m < selectedMuons.size() ; ++m)
+      {
+	 Muon * muon = selectedMuons[m];
+	 if ( muon->pt() < muonsptmin_[m] || fabs(muon->eta()) > muonsetamax_[m] ) continue ;
+
+	 float dR_muj0 = selectedJets[0]->deltaR(*muon) ;
+	 float dR_muj1 = selectedJets[1]->deltaR(*muon) ;
+
+	 if ( dR_muj0 < drmax_ || dR_muj1 < drmax_ ) muonJetEvent = true ;
+      }
+*/      
+      if ( muonJetEvent ) continue;
+      ++nsel[7];
+
+      // Fill histograms of passed bbb/bbnb btagging selection
       for ( int j = 0 ; j < (int)selectedJets.size() ; ++j )
       {
          if ( selectedJets[j]->pt() < 20. ) continue;
@@ -254,14 +313,6 @@ int main(int argc, char * argv[])
          h1[Form("eta_%i_btag",j)]  -> Fill(jet->eta());
          h1[Form("phi_%i_btag",j)]  -> Fill(jet->phi());
          h1[Form("btag_%i_btag",j)] -> Fill(GetBTag(*jet,btagalgo_));
-         
-         h2[Form("eta_phi_%d_btag",j)] -> Fill(jet->eta(),jet->phi());
-         
-         if ( jet->pt() >= 100 && jet->pt() < 140 )   h1[Form("btag_%d_%d_btag",j,0)] -> Fill(GetBTag(*jet,btagalgo_));
-         if ( jet->pt() >= 140 && jet->pt() < 200 )   h1[Form("btag_%d_%d_btag",j,1)] -> Fill(GetBTag(*jet,btagalgo_));
-         if ( jet->pt() >= 200 && jet->pt() < 350 )   h1[Form("btag_%d_%d_btag",j,2)] -> Fill(GetBTag(*jet,btagalgo_));
-         if ( jet->pt() >= 350                    )   h1[Form("btag_%d_%d_btag",j,3)] -> Fill(GetBTag(*jet,btagalgo_));
-         
       }
       mbb = (selectedJets[0]->p4() + selectedJets[1]->p4()).M();
       if ( !signalregion_ )
@@ -277,14 +328,10 @@ int main(int argc, char * argv[])
    {
       ih1.second -> Write();
    }
-   for (auto & ih2 : h2)
-   {
-      ih2.second -> Write();
-   }
    
    hout.Write();
    hout.Close();
-   
+
 // PRINT OUTS   
    
    // Cut flow
@@ -294,12 +341,13 @@ int main(int argc, char * argv[])
    // 3: kinematics
    // 4: delta R
    // 5: delta eta
-   // 6: btag (bbnb)
-   
+   // 6: btag (bbnb or bbb)
+   // 7: muon veto   
+
    double fracAbs[10];
    double fracRel[10];
    std::string cuts[10];
-   cuts[0] = "Triggered";
+   cuts[0] = "JSON + Triggered";
    cuts[1] = "Triple idloose-jet";
    cuts[2] = "Triple jet kinematics";
    cuts[3] = "Delta R(i;j)";
@@ -307,9 +355,10 @@ int main(int argc, char * argv[])
    cuts[5] = "btagged (bbnb)";
    if ( signalregion_ ) cuts[5] = "btagged (bbb)";
    cuts[6] = "Matched to online j1;j2";
-   
+   cuts[7] = "Veto muon in j1;j2";  
+
    printf ("%-23s  %10s  %10s  %10s \n", std::string("Cut flow").c_str(), std::string("# events").c_str(), std::string("absolute").c_str(), std::string("relative").c_str() ); 
-   for ( int i = 0; i < 7; ++i )
+   for ( int i = 0; i < 8; ++i )
    {
       fracAbs[i] = double(nsel[i])/nsel[0];
       if ( i>0 )
@@ -319,13 +368,13 @@ int main(int argc, char * argv[])
       printf ("%-23s  %10d  %10.3f  %10.3f \n", cuts[i].c_str(), nsel[i], fracAbs[i], fracRel[i] ); 
    }
    // CSV output
-   printf ("%-23s , %10s , %10s , %10s \n", std::string("Cut flow").c_str(), std::string("# events").c_str(), std::string("absolute").c_str(), std::string("relative").c_str() ); 
-   for ( int i = 0; i < 7; ++i )
-      printf ("%-23s , %10d , %10.3f , %10.3f \n", cuts[i].c_str(), nsel[i], fracAbs[i], fracRel[i] ); 
+   //printf ("%-23s , %10s , %10s , %10s \n", std::string("Cut flow").c_str(), std::string("# events").c_str(), std::string("absolute").c_str(), std::string("relative").c_str() ); 
+   //for ( int i = 0; i < 8; ++i )
+   //   printf ("%-23s , %10d , %10.3f , %10.3f \n", cuts[i].c_str(), nsel[i], fracAbs[i], fracRel[i] ); 
 
    // Trigger objects counts   
-   std::cout << std::endl;
-   printf ("%-40s  %10s \n", std::string("Trigger object").c_str(), std::string("# events").c_str() ); 
+   //std::cout << std::endl;
+   //printf ("%-40s  %10s \n", std::string("Trigger object").c_str(), std::string("# events").c_str() ); 
 //   for ( size_t io = 0; io < triggerObjects_.size() ; ++io )
 //   {
 //      printf ("%-40s  %10d \n", triggerObjects_[io].c_str(), nmatch[io] ); 
@@ -358,4 +407,24 @@ float GetBTag(const Jet & jet, const std::string & algo)
       btag = -9999;
    }
    return btag;
+}
+
+const bool onlineSelection(const analysis::tools::Jet & fLeadOfflineJet, const analysis::tools::Jet & sLeadOfflineJet, const bool & before_run_crit)
+{
+	for(const auto & triggerObject : triggerObjects_)
+	{
+		int i = &triggerObject - &triggerObjects_[0];
+		if(!before_run_crit && i == 0) continue;
+		else if (before_run_crit && i == 1) continue;
+		auto fOnlineJet = fLeadOfflineJet.matched(triggerObject);
+		auto sOnlineJet = sLeadOfflineJet.matched(triggerObject);
+		if ( ! fOnlineJet || ! sOnlineJet || fOnlineJet == sOnlineJet ) return false;
+
+		// Check the dEta between online objects
+		if ( triggerObject.find("dEtaMax") != std::string::npos || triggerObject.find("MaxDeta") != std::string::npos )
+		{
+			if(std::abs(fOnlineJet->eta() - sOnlineJet->eta()) > 1.6) return false;
+		}	
+	}
+	return true;
 }

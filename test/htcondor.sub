@@ -1,0 +1,20 @@
+### Template for HTCondor job submissions
+universe = vanilla
+
+executable = /nfs/dust/cms/user/chayanit/MSSMHBB_Myfork2017/CMSSW_9_4_4/bin/slc6_amd64_gcc630/MssmHbbAnalysis
+output = MssmHbbAnalysis.o
+error = MssmHbbAnalysis.err
+log = MssmHbbAnalysis.log
+arguments = " -c examples/allhadronic/mssmhbb_onlcsv2017.cfg"
+
+#requirements = OpSysAndVer == "SL6"
+getenv = true
+#environment = "LD_LIB_PATH=__LD_L_P__"
+
+#RequestMemory = __REQMEM__
+#+RequestRuntime = __REQTIME__
+#nice_user = false
+
+notification = error
+
+queue

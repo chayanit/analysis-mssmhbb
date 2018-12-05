@@ -15,7 +15,7 @@
 #include <iostream>
 // 
 // user include files
-#include "Analysis/MssmHbb/interface/MssmHbb.h"
+#include "Analysis/Mssmhbb/interface/MssmHbb.h"
 
 
 //

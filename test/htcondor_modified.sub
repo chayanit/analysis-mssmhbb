@@ -1,0 +1,20 @@
+### Template for HTCondor job submissions
+universe = vanilla
+
+executable = submit.sh 
+output = MssmHbbAnalysis.o
+error = MssmHbbAnalysis.err
+log = MssmHbbAnalysis.log
+#arguments = " -c examples/allhadronic/mssmhbb_onlcsv2017.cfg"
+
+#requirements = OpSysAndVer == "SL6"
+getenv = true
+#environment = "LD_LIB_PATH=__LD_L_P__"
+
+#RequestMemory = __REQMEM__
+#+RequestRuntime = __REQTIME__
+#nice_user = false
+
+notification = error
+
+queue
