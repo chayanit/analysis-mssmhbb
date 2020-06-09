@@ -1,1 +1,0 @@
-/pnfs/desy.de/cms/tier2/store/user/rwalsh/Analysis/Ntuples/DATA/Run2018/ntuplizer_101X_2018_promptreco/JetHT/Run2018A-PromptReco-v1/180514_125858/0000/ntuple_70.root
